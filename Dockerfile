@@ -17,4 +17,4 @@ COPY . .
 
 EXPOSE 8000
 
-CMD chainlit run mem-app.py --host 0.0.0.0 --port 8000 -w
+CMD chainlit run app.py --host 0.0.0.0 --port 8000 -w
