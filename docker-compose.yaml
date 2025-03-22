@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  space:
+    build:
+      context: .
+    ports:
+      - "7860:7860"
+    env_file:
+      - .env
+    command: ["chainlit", "run", "app.py", "--host", "0.0.0.0", "--port", "7860"]
+    volumes:
+      - .:/app
