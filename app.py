@@ -157,16 +157,16 @@ def agent(state: State) -> State:
         "<recall_memory>\n" + "\n".join(state["recall_memories"]) + "\n</recall_memory>"
     )
     # Load the vector store
-    print(state["messages"][-1].content)
-    vectorstore = Chroma(persist_directory="chroma-BAAI", embedding_function=embedding_model)
-    res = vectorstore.similarity_search(state["messages"][-1].content, k=3) 
-    context = " ".join([doc.page_content for doc in res])
+    # print(state["messages"][-1].content)
+    # vectorstore = Chroma(persist_directory="chroma-BAAI", embedding_function=embedding_model)
+    # res = vectorstore.similarity_search(state["messages"][-1].content, k=3) 
+    # context = " ".join([doc.page_content for doc in res])
     # context = "I am dheeraj"
 
     prediction = bound.invoke(
         {
             "messages": state["messages"],
-            "context": context,
+            # "context": context,
             "recall_memories": recall_str
             
         }
