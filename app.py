@@ -28,20 +28,19 @@ from langchain_community.document_loaders import PyPDFLoader
 load_dotenv()
 
 # Initialize global variables with proper error handling
-try:
-    llm = ChatGroq(
-        temperature=0,
-        groq_api_key=os.getenv("GROQ_API_KEY"),
-        model_name="deepseek-r1-distill-llama-70b"
-    )
 
-    model_name = "BAAI/bge-small-en-v1.5"
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModel.from_pretrained(model_name)
-    embedding_model = HuggingFaceEmbeddings(model_name="BAAI/bge-small-en-v1.5")
-    recall_vector_store = InMemoryVectorStore(embedding_model)
-except Exception as e:
-    print(f"Initialization error: {str(e)}")
+llm = ChatGroq(
+    temperature=0,
+    groq_api_key=os.getenv("GROQ_API_KEY"),
+    model_name="deepseek-r1-distill-llama-70b"
+)
+
+model_name = "BAAI/bge-small-en-v1.5"
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+model = AutoModel.from_pretrained(model_name)
+embedding_model = HuggingFaceEmbeddings(model_name="BAAI/bge-small-en-v1.5")
+recall_vector_store = InMemoryVectorStore(embedding_model)
+
 
 def get_user_id(config: RunnableConfig) -> str:
     user_id = config["configurable"].get("user_id")
@@ -54,7 +53,7 @@ def get_user_id(config: RunnableConfig) -> str:
 async def start():
     # Display static message at the top
     await cl.Message(content="📌 **You can enter a web_link/pdf and ask a question**").send()
-    url = await cl.AskUserMessage(content="Enter a website URL:", timeout=1).send()
+    url = await cl.AskUserMessage(content="Enter a website URL:", timeout=10).send()
     # await cl.Message(content=f"{url['output']}").send()
     web_link = "No_weblink"
     if url:
@@ -264,12 +263,18 @@ async def main(msg: cl.Message):
                 # if element.mime and "pdf" in element.mime.lower():
                 loader=PyPDFLoader(element.path)
                 docs=loader.load()
-                await cl.Message(content=f"{str(docs[0].page_content[:1000])}").send()
+                # await cl.Message(content=f"{str(docs[0].page_content[:1000])}").send()
                 text_splitter=RecursiveCharacterTextSplitter(chunk_size=1000,chunk_overlap=200)
                 documents=text_splitter.split_documents(docs)
-                vectorstore = FAISS.from_documents(documents, embedding_model)
-                # # Store vectorstore in session for further querying
-                cl.user_session.set("vectorstore", vectorstore)
+                if not documents:
+                    await cl.Message(content="⚠️ No content extracted from the pdf. Try another URL.").send()
+                else:
+                    # Store embeddings in FAISS
+                    vectorstore = FAISS.from_documents(documents, embedding_model)
+                    # Store vectorstore in session for further querying
+                    cl.user_session.set("vectorstore", vectorstore)
+                    
+                    await cl.Message(content="✅ pdf processed successfully! You can now ask questions.").send()
         response = list(graph.stream({"messages": [HumanMessage(content=msg.content)]}, config=config))
         
         answer = cl.Message(content=response[-1]['agent']['messages'][0].content)
