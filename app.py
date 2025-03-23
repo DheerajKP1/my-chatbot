@@ -23,16 +23,20 @@ from langchain_core.vectorstores import InMemoryVectorStore
 
 load_dotenv()
 
-llm=ChatGroq(
-    temperature=0,
-    groq_api_key='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',
-    model_name="deepseek-r1-distill-llama-70b"
-)
+try:
+    llm = ChatGroq(
+        temperature=0,
+        groq_api_key=os.getenv("GROQ_API_KEY"),
+        model_name="deepseek-r1-distill-llama-70b"
+    )
 
-model_name = "BAAI/bge-small-en-v1.5"
-tokenizer = AutoTokenizer.from_pretrained(model_name)
-model = AutoModel.from_pretrained(model_name)
-embedding_model = HuggingFaceEmbeddings(model_name="BAAI/bge-small-en-v1.5")
+    model_name = "BAAI/bge-small-en-v1.5"
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModel.from_pretrained(model_name)
+    embedding_model = HuggingFaceEmbeddings(model_name="BAAI/bge-small-en-v1.5")
+    recall_vector_store = InMemoryVectorStore(embedding_model)
+except Exception as e:
+    print(f"Initialization error: {str(e)}")
 
 def get_user_id(config: RunnableConfig) -> str:
     user_id = config["configurable"].get("user_id")
@@ -42,7 +46,6 @@ def get_user_id(config: RunnableConfig) -> str:
     return user_id
 
 
-recall_vector_store = InMemoryVectorStore(embedding_model)
 
 @tool
 def save_recall_memory(memory: str, config: RunnableConfig) -> str:
@@ -217,16 +220,33 @@ graph = builder.compile(checkpointer=memory)
 config = {"configurable": {"user_id": "1", "thread_id": "1"}}
 
 
-
+@cl.on_chat_start
+async def setup():
+    """Initialize the chat session and welcome the user."""
+    try:
+        # Check if environment variables are properly loaded
+        if not os.getenv("GROQ_API_KEY"):
+            await cl.Message(content="⚠️ GROQ_API_KEY not found. Please check your environment variables.").send()
+            return
+            
+        # Welcome message
+        await cl.Message(content="Welcome! I'm your AI assistant with memory capabilities. How can I help you today?").send()
+    except Exception as e:
+        # Handle and display any initialization errors
+        await cl.Message(content=f"Initialization error: {str(e)}").send()
 
 @cl.on_message
 async def main(msg: cl.Message):
-    typing = cl.Message(content="Thinking...")  
-    await typing.send()
-    # final_answer = cl.Message(content="")
-    response = list(graph.stream({"messages": [HumanMessage(content=msg.content)]}, config=config))
-
-    answer = cl.Message(content = response[-1]['agent']['messages'][0].content)
-    
-    
-    await answer.send()
+    try:
+        typing = cl.Message(content="Thinking...")  
+        await typing.send()
+        
+        response = list(graph.stream({"messages": [HumanMessage(content=msg.content)]}, config=config))
+        
+        answer = cl.Message(content=response[-1]['agent']['messages'][0].content)
+        await answer.send()
+        
+    except Exception as e:
+        # Handle errors that might occur during processing
+        error_msg = cl.Message(content=f"An error occurred: {str(e)}")
+        await error_msg.send()
