@@ -1,4 +1,4 @@
-## Important libraries
+# Important libraries
 import chainlit as cl
 from langchain_groq import ChatGroq
 from dotenv import load_dotenv
@@ -23,6 +23,7 @@ from langchain_core.vectorstores import InMemoryVectorStore
 
 load_dotenv()
 
+# Initialize global variables with proper error handling
 try:
     llm = ChatGroq(
         temperature=0,
@@ -44,8 +45,6 @@ def get_user_id(config: RunnableConfig) -> str:
         raise ValueError("User ID needs to be provided to save a memory.")
 
     return user_id
-
-
 
 @tool
 def save_recall_memory(memory: str, config: RunnableConfig) -> str:
@@ -133,8 +132,6 @@ prompt = ChatPromptTemplate.from_messages(
     ]
 )
 
-
-
 def agent(state: State) -> State:
     """Process the current state and generate a response using the LLM.
 
@@ -167,7 +164,6 @@ def agent(state: State) -> State:
         "messages": [prediction],
     }
 
-
 def load_memories(state: State, config: RunnableConfig) -> State:
     """Load memories for the current conversation.
 
@@ -184,7 +180,6 @@ def load_memories(state: State, config: RunnableConfig) -> State:
     return {
         "recall_memories": recall_memories,
     }
-
 
 def route_tools(state: State):
     """Determine whether to use tools or end the conversation based on the last message.
@@ -219,7 +214,7 @@ graph = builder.compile(checkpointer=memory)
 
 config = {"configurable": {"user_id": "1", "thread_id": "1"}}
 
-
+# Add initialization function for Chainlit
 @cl.on_chat_start
 async def setup():
     """Initialize the chat session and welcome the user."""
