@@ -27,7 +27,7 @@ load_dotenv()
 try:
     llm = ChatGroq(
         temperature=0,
-        groq_api_key='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',
+        groq_api_key=os.getenv("GROQ_API_KEY"),
         model_name="deepseek-r1-distill-llama-70b"
     )
 
