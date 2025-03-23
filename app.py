@@ -11,7 +11,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableConfig
 from langchain_core.documents import Document
 # from langchain.vectorstores import Chroma
-from langchain_community.vectorstores import Chroma
+# from langchain_community.vectorstores import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 # from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain.schema import HumanMessage, AIMessage
@@ -20,6 +20,10 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import MessagesState, StateGraph, START, END
 from langchain_core.tools import tool
 from langchain_core.vectorstores import InMemoryVectorStore
+from langchain_community.document_loaders import WebBaseLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_community.vectorstores import FAISS
+from langchain_community.document_loaders import PyPDFLoader
 
 load_dotenv()
 
@@ -27,7 +31,7 @@ load_dotenv()
 try:
     llm = ChatGroq(
         temperature=0,
-        groq_api_key='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',
+        groq_api_key=os.getenv("GROQ_API_KEY"),
         model_name="deepseek-r1-distill-llama-70b"
     )
 
@@ -45,6 +49,36 @@ def get_user_id(config: RunnableConfig) -> str:
         raise ValueError("User ID needs to be provided to save a memory.")
 
     return user_id
+
+@cl.on_chat_start
+async def start():
+    # Display static message at the top
+    await cl.Message(content="📌 **You can enter a web_link/pdf and ask a question**").send()
+    url = await cl.AskUserMessage(content="Enter a website URL:", timeout=1).send()
+    # await cl.Message(content=f"{url['output']}").send()
+    web_link = "No_weblink"
+    if url:
+        web_link = url['output']
+    if web_link.startswith("http://") or web_link.startswith("https://"):
+        # Load and process webpage
+        loader = WebBaseLoader(url['output'])
+        page_data = loader.load()
+        
+        # Split content into chunks
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=200)
+        documents = text_splitter.split_documents(page_data)
+        if not documents:
+            await cl.Message(content="⚠️ No content extracted from the webpage. Try another URL.").send()
+        else:
+            # Store embeddings in FAISS
+            vectorstore = FAISS.from_documents(documents, embedding_model)
+            # Store vectorstore in session for further querying
+            cl.user_session.set("vectorstore", vectorstore)
+            
+            await cl.Message(content="✅ Webpage processed successfully! You can now ask questions.").send()
+    else:
+        print("No Web_link")
+    #     await cl.Message(content="As you have not given any weblink lets go with general question pleas enter your question").send()
 
 @tool
 def save_recall_memory(memory: str, config: RunnableConfig) -> str:
@@ -87,10 +121,10 @@ prompt = ChatPromptTemplate.from_messages(
             " important details that will help you better attend to the user's"
             " needs and understand their context.\n\n"
             ## Rag Prompt
-            # " You are designed to help user in finding the best possible answer from uploased pdf"
-            # " files. You can ask user for clarification if you are unsure about"
-            # " Use the following context while answering the user's question:\n\n"
-            # " Context :\n {context}\n\n"
+            " You are designed to help user in finding the best possible answer from given information."
+            " You can ask user for clarification if you are unsure about"
+            " Use the following context while answering the user's question:\n\n"
+            " Context :\n {context}\n\n"
             ##########
             "Memory Usage Guidelines:\n"
             "1. Actively use memory tools (save_core_memory, save_recall_memory)"
@@ -146,16 +180,20 @@ def agent(state: State) -> State:
         "<recall_memory>\n" + "\n".join(state["recall_memories"]) + "\n</recall_memory>"
     )
     # Load the vector store
-    # print(state["messages"][-1].content)
+    print(state["messages"][-1].content)
     # vectorstore = Chroma(persist_directory="chroma-BAAI", embedding_function=embedding_model)
-    # res = vectorstore.similarity_search(state["messages"][-1].content, k=3) 
-    # context = " ".join([doc.page_content for doc in res])
+    vectorstore = cl.user_session.get("vectorstore",None)
+    if vectorstore is not None:
+        res = vectorstore.similarity_search(state["messages"][-1].content, k=3) 
+        context = " ".join([doc.page_content for doc in res])
+    else:
+        context = "User have not specified any context yet please go ahead with knowledege and give answer"
     # context = "I am dheeraj"
 
     prediction = bound.invoke(
         {
             "messages": state["messages"],
-            # "context": context,
+            "context": context,
             "recall_memories": recall_str
             
         }
@@ -214,28 +252,24 @@ graph = builder.compile(checkpointer=memory)
 
 config = {"configurable": {"user_id": "1", "thread_id": "1"}}
 
-# Add initialization function for Chainlit
-@cl.on_chat_start
-async def setup():
-    """Initialize the chat session and welcome the user."""
-    try:
-        # Check if environment variables are properly loaded
-        if not os.getenv("GROQ_API_KEY"):
-            await cl.Message(content="⚠️ GROQ_API_KEY not found. Please check your environment variables.").send()
-            return
-            
-        # Welcome message
-        await cl.Message(content="Welcome! I'm your AI assistant with memory capabilities. How can I help you today?").send()
-    except Exception as e:
-        # Handle and display any initialization errors
-        await cl.Message(content=f"Initialization error: {str(e)}").send()
+
 
 @cl.on_message
 async def main(msg: cl.Message):
-    try:
-        typing = cl.Message(content="Thinking...")  
-        await typing.send()
-        
+    try: 
+        # await cl.Message(content=f"Unsupported file type: {msg.elements}").send()
+        if msg.elements:
+            for element in msg.elements:
+                print(f"Received file: {element.name}, Type: {element.mime}, Path: {element.path}")  # Debugging
+                # if element.mime and "pdf" in element.mime.lower():
+                loader=PyPDFLoader(element.path)
+                docs=loader.load()
+                await cl.Message(content=f"{str(docs[0].page_content[:1000])}").send()
+                text_splitter=RecursiveCharacterTextSplitter(chunk_size=1000,chunk_overlap=200)
+                documents=text_splitter.split_documents(docs)
+                vectorstore = FAISS.from_documents(documents, embedding_model)
+                # # Store vectorstore in session for further querying
+                cl.user_session.set("vectorstore", vectorstore)
         response = list(graph.stream({"messages": [HumanMessage(content=msg.content)]}, config=config))
         
         answer = cl.Message(content=response[-1]['agent']['messages'][0].content)
