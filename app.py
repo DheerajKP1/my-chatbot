@@ -53,7 +53,7 @@ def get_user_id(config: RunnableConfig) -> str:
 async def start():
     # Display static message at the top
     await cl.Message(content="📌 **You can enter a web_link/pdf and ask a question**").send()
-    url = await cl.AskUserMessage(content="Enter a website URL:", timeout=10).send()
+    url = await cl.AskUserMessage(content="Enter a website URL:", timeout=20).send()
     # await cl.Message(content=f"{url['output']}").send()
     web_link = "No_weblink"
     if url:
@@ -275,6 +275,11 @@ async def main(msg: cl.Message):
                     cl.user_session.set("vectorstore", vectorstore)
                     
                     await cl.Message(content="✅ pdf processed successfully! You can now ask questions.").send()
+                try:
+                    os.remove(element.path)
+                    print(f"Deleted file: {element.path}")  # Debugging
+                except Exception as e:
+                    print(f"Error deleting file {element.path}: {e}")
         response = list(graph.stream({"messages": [HumanMessage(content=msg.content)]}, config=config))
         
         answer = cl.Message(content=response[-1]['agent']['messages'][0].content)
