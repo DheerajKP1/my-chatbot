@@ -77,7 +77,7 @@ async def start():
             await cl.Message(content="✅ Webpage processed successfully! You can now ask questions.").send()
     else:
         print("No Web_link")
-    #     await cl.Message(content="As you have not given any weblink lets go with general question pleas enter your question").send()
+        await cl.Message(content="As you have not given any weblink lets go with general question pleas enter your question").send()
 
 @tool
 def save_recall_memory(memory: str, config: RunnableConfig) -> str:
