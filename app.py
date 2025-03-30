@@ -41,6 +41,9 @@ model = AutoModel.from_pretrained(model_name)
 embedding_model = HuggingFaceEmbeddings(model_name="BAAI/bge-small-en-v1.5")
 recall_vector_store = InMemoryVectorStore(embedding_model)
 
+class State(MessagesState):
+    # add memories that will be retrieved based on the conversation context
+    recall_memories: List[str]
 
 def get_user_id(config: RunnableConfig) -> str:
     user_id = config["configurable"].get("user_id")
@@ -49,39 +52,78 @@ def get_user_id(config: RunnableConfig) -> str:
 
     return user_id
 
-@cl.on_chat_start
-async def start():
-    # Display static message at the top
-    await cl.Message(content="📌 **You can enter a web_link/pdf and ask a question**").send()
-    url = await cl.AskUserMessage(content="Enter a website URL:", timeout=20).send()
-    # await cl.Message(content=f"{url['output']}").send()
-    web_link = "No_weblink"
-    if url:
-        web_link = url['output']
+@tool 
+def web_agent(web_link:str,config: RunnableConfig) -> None:
+    """
+    Process a webpage by loading its content, splitting it into chunks, and storing the embeddings in FAISS.
+    
+    Args:
+        web_link (str): The URL of the webpage to process. Must start with 'http://' or 'https://'.
+        config (RunnableConfig): Configuration for the runnable.
+        
+    Returns:
+        None: This function returns None and prints status messages.
+    """
+    print("called web_agent")
     if web_link.startswith("http://") or web_link.startswith("https://"):
         # Load and process webpage
-        loader = WebBaseLoader(url['output'])
+        loader = WebBaseLoader(web_link)
         page_data = loader.load()
         
         # Split content into chunks
         text_splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=200)
         documents = text_splitter.split_documents(page_data)
         if not documents:
-            await cl.Message(content="⚠️ No content extracted from the webpage. Try another URL.").send()
+            print(" No content extracted from the webpage. Try another URL.")
         else:
             # Store embeddings in FAISS
             vectorstore = FAISS.from_documents(documents, embedding_model)
             # Store vectorstore in session for further querying
             cl.user_session.set("vectorstore", vectorstore)
             
-            await cl.Message(content="✅ Webpage processed successfully! You can now ask questions.").send()
+            print("✅ Webpage processed successfully! You can now ask questions.")
     else:
         print("No Web_link")
-        await cl.Message(content="As you have not given any weblink lets go with general question pleas enter your question").send()
+    return "Webpage processed successfully! You can now ask questions."
+@tool
+def Pdf_agent(pdf_path: str, config: RunnableConfig) -> None:
+    """
+    Process a pdf by loading its content, splitting it into chunks, and storing the embeddings in FAISS and deleting the pdf file.
+    
+    Args:
+        pdf_path (str): The path of the pdf to process. Must end with '.pdf'.
+        config (RunnableConfig): Configuration for the runnable.
+        
+    Returns:
+        None: This function returns None and prints status messages.
+    """
+    # if element.mime and "pdf" in element.mime.lower():
+    print("called Pdf_agent and pdf path-",pdf_path)
+    if pdf_path.endswith(".pdf"):
+        loader=PyPDFLoader(pdf_path)
+        docs=loader.load()
+        # await cl.Message(content=f"{str(docs[0].page_content[:1000])}").send()
+        text_splitter=RecursiveCharacterTextSplitter(chunk_size=1000,chunk_overlap=200)
+        documents=text_splitter.split_documents(docs)
+        if not documents:
+            print("⚠️ No content extracted from the pdf. Try another URL.")
+        else:
+            # Store embeddings in FAISS
+            vectorstore = FAISS.from_documents(documents, embedding_model)
+            # Store vectorstore in session for further querying
+            cl.user_session.set("vectorstore", vectorstore)
+            
+            print("✅ pdf processed successfully! You can now ask questions.")
+        try:
+            os.remove(pdf_path)
+            print(f"Deleted file: {pdf_path}")  # Debugging
+        except Exception as e:
+            print(f"Error deleting file {pdf_path}: {e}")
 
 @tool
 def save_recall_memory(memory: str, config: RunnableConfig) -> str:
     """Save memory to vectorstore for later semantic retrieval."""
+    print("called save_recall_memory")
     user_id = get_user_id(config)
     document = Document(
         page_content=memory, id=str(uuid.uuid4()), metadata={"user_id": user_id}
@@ -92,6 +134,7 @@ def save_recall_memory(memory: str, config: RunnableConfig) -> str:
 @tool
 def search_recall_memories(query: str, config: RunnableConfig) -> List[str]:
     """Search for relevant memories."""
+    print("called search_recall_memories")
     user_id = get_user_id(config)
 
     def _filter_function(doc: Document) -> bool:
@@ -102,26 +145,26 @@ def search_recall_memories(query: str, config: RunnableConfig) -> List[str]:
     )
     return [document.page_content for document in documents]
 
-tools = [save_recall_memory, search_recall_memories]
-
-class State(MessagesState):
-    # add memories that will be retrieved based on the conversation context
-    recall_memories: List[str]
-
 # Define the prompt template for the agent
 prompt = ChatPromptTemplate.from_messages(
     [
         (
             "system",
-            "You are a helpful assistant with advanced long-term memory"
+            "You are a helpful assistant with advanced long-term memory and agents tool"
             " capabilities. Powered by a stateless LLM, you must rely on"
             " external memory to store information between conversations."
-            " Utilize the available memory tools to store and retrieve"
+            " Utilize the available memory and agents tools to store and retrieve"
             " important details that will help you better attend to the user's"
             " needs and understand their context.\n\n"
+            ## 
+            ## Agent Prompt
+            " You have three tools at your disposal: `memory`, `recall`, `web_agent`, `pdf_agent`."
+            " to help you store and retrieve information. You can use these tools.\n"
+            " When user ask question that vary over time then please web agent for getting latest information."
+            " if possible use some good websites like Wikipedia, Google, etc. for getting latest information.\n\n"
             ## Rag Prompt
-            " You are designed to help user in finding the best possible answer from given information."
-            " You can ask user for clarification if you are unsure about"
+            # " You are designed to help user in finding the best possible answer from given information."
+            # " You can ask user for clarification if you are unsure about"
             " Use the following context while answering the user's question:\n\n"
             " Context :\n {context}\n\n"
             ##########
@@ -164,7 +207,8 @@ prompt = ChatPromptTemplate.from_messages(
         ("placeholder", "{messages}"),
     ]
 )
-
+tools = [save_recall_memory, search_recall_memories, web_agent, Pdf_agent]
+model_with_tools = llm.bind_tools(tools)
 def agent(state: State) -> State:
     """Process the current state and generate a response using the LLM.
 
@@ -174,12 +218,12 @@ def agent(state: State) -> State:
     Returns:
         schemas.State: The updated state with the agent's response.
     """
-    bound = prompt | llm
+    bound = prompt | model_with_tools
     recall_str = (
         "<recall_memory>\n" + "\n".join(state["recall_memories"]) + "\n</recall_memory>"
     )
     # Load the vector store
-    print(state["messages"][-1].content)
+    print("content in agent-",state["messages"])
     # vectorstore = Chroma(persist_directory="chroma-BAAI", embedding_function=embedding_model)
     vectorstore = cl.user_session.get("vectorstore",None)
     if vectorstore is not None:
@@ -228,6 +272,8 @@ def route_tools(state: State):
         Literal["tools", "__end__"]: The next step in the graph.
     """
     msg = state["messages"][-1]
+    # print("message-------",state["messages"][-1])
+    print("called route_tools-",msg.tool_calls)
     if msg.tool_calls:
         return "tools"
 
@@ -237,6 +283,7 @@ def route_tools(state: State):
 builder = StateGraph(State)
 builder.add_node(load_memories)
 builder.add_node(agent)
+
 builder.add_node("tools", ToolNode(tools))
 
 # Add edges to the graph
@@ -257,29 +304,33 @@ config = {"configurable": {"user_id": "1", "thread_id": "1"}}
 async def main(msg: cl.Message):
     try: 
         # await cl.Message(content=f"Unsupported file type: {msg.elements}").send()
+        # file_path = ""
         if msg.elements:
-            for element in msg.elements:
-                print(f"Received file: {element.name}, Type: {element.mime}, Path: {element.path}")  # Debugging
-                # if element.mime and "pdf" in element.mime.lower():
-                loader=PyPDFLoader(element.path)
-                docs=loader.load()
-                # await cl.Message(content=f"{str(docs[0].page_content[:1000])}").send()
-                text_splitter=RecursiveCharacterTextSplitter(chunk_size=1000,chunk_overlap=200)
-                documents=text_splitter.split_documents(docs)
-                if not documents:
-                    await cl.Message(content="⚠️ No content extracted from the pdf. Try another URL.").send()
-                else:
-                    # Store embeddings in FAISS
-                    vectorstore = FAISS.from_documents(documents, embedding_model)
-                    # Store vectorstore in session for further querying
-                    cl.user_session.set("vectorstore", vectorstore)
+            file_path = msg.elements[0].path
+            msg.content = msg.content + "pdf_file-" + file_path
+            # for element in msg.elements:
+            #     print(f"Received file: {element.name}, Type: {element.mime}, Path: {element.path}")  # Debugging
+            #     # if element.mime and "pdf" in element.mime.lower():
+            #     loader=PyPDFLoader(element.path)
+            #     docs=loader.load()
+            #     # await cl.Message(content=f"{str(docs[0].page_content[:1000])}").send()
+            #     text_splitter=RecursiveCharacterTextSplitter(chunk_size=1000,chunk_overlap=200)
+            #     documents=text_splitter.split_documents(docs)
+            #     if not documents:
+            #         await cl.Message(content="⚠️ No content extracted from the pdf. Try another URL.").send()
+            #     else:
+            #         # Store embeddings in FAISS
+            #         vectorstore = FAISS.from_documents(documents, embedding_model)
+            #         # Store vectorstore in session for further querying
+            #         cl.user_session.set("vectorstore", vectorstore)
                     
-                    await cl.Message(content="✅ pdf processed successfully! You can now ask questions.").send()
-                try:
-                    os.remove(element.path)
-                    print(f"Deleted file: {element.path}")  # Debugging
-                except Exception as e:
-                    print(f"Error deleting file {element.path}: {e}")
+            #         await cl.Message(content="✅ pdf processed successfully! You can now ask questions.").send()
+            #     try:
+            #         # os.remove(element.path)
+            #         print(f"Deleted file: {element.path}")  # Debugging
+            #     except Exception as e:
+            #         print(f"Error deleting file {element.path}: {e}")
+        # print(msg.elements[0].path)
         response = list(graph.stream({"messages": [HumanMessage(content=msg.content)]}, config=config))
         
         answer = cl.Message(content=response[-1]['agent']['messages'][0].content)
