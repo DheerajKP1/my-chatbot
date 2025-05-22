@@ -32,7 +32,7 @@ load_dotenv()
 llm = ChatGroq(
     temperature=0,
     groq_api_key=os.getenv("GROQ_API_KEY"),
-    model_name="deepseek-r1-distill-llama-70b"
+    model_name="gemma2-9b-it"
 )
 
 model_name = "BAAI/bge-small-en-v1.5"
@@ -51,74 +51,150 @@ def get_user_id(config: RunnableConfig) -> str:
         raise ValueError("User ID needs to be provided to save a memory.")
 
     return user_id
-
-@tool 
-def web_agent(web_link:str,config: RunnableConfig) -> None:
+@tool
+def context_agent(query: str ) -> str:
     """
-    Process a webpage by loading its content, splitting it into chunks, and storing the embeddings in FAISS.
+    takes a query and do semantic search on the vectorstore and get the context for the query
+    Args:
+        query: query to be searched in the vectorstore
+    Returns:
+        str: The context retrieved from the vectorstore.
+    """
+    print("called context_agent")
+
+    vectorstore = FAISS.load_local(
+                    "faiss_index", 
+                    embedding_model, 
+                    allow_dangerous_deserialization=True
+                            )
+    relevent_context = vectorstore.similarity_search(query, k=3)
+    context = " ".join([doc.page_content for doc in relevent_context])
+    return context
+@tool
+def web_agent(web_link: str, query: str ) -> str:
+    """
+    Process a webpage by loading its content, splitting it into chunks, and storing the embeddings in FAISS 
+    whenever user asks for latest information.
     
     Args:
         web_link (str): The URL of the webpage to process. Must start with 'http://' or 'https://'.
-        config (RunnableConfig): Configuration for the runnable.
+        query (str): The user's query to search for relevant context.
         
     Returns:
-        None: This function returns None and prints status messages.
+        str: The context retrieved from the vectorstore.
     """
     print("called web_agent")
-    if web_link.startswith("http://") or web_link.startswith("https://"):
-        # Load and process webpage
-        loader = WebBaseLoader(web_link)
-        page_data = loader.load()
-        
-        # Split content into chunks
-        text_splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=200)
-        documents = text_splitter.split_documents(page_data)
-        if not documents:
-            print(" No content extracted from the webpage. Try another URL.")
-        else:
-            # Store embeddings in FAISS
-            vectorstore = FAISS.from_documents(documents, embedding_model)
-            # Store vectorstore in session for further querying
-            cl.user_session.set("vectorstore", vectorstore)
-            
-            print("✅ Webpage processed successfully! You can now ask questions.")
-    else:
-        print("No Web_link")
-    return "Webpage processed successfully! You can now ask questions."
-@tool
-def Pdf_agent(pdf_path: str, config: RunnableConfig) -> None:
-    """
-    Process a pdf by loading its content, splitting it into chunks, and storing the embeddings in FAISS and deleting the pdf file.
     
-    Args:
-        pdf_path (str): The path of the pdf to process. Must end with '.pdf'.
-        config (RunnableConfig): Configuration for the runnable.
-        
-    Returns:
-        None: This function returns None and prints status messages.
-    """
-    # if element.mime and "pdf" in element.mime.lower():
-    print("called Pdf_agent and pdf path-",pdf_path)
-    if pdf_path.endswith(".pdf"):
-        loader=PyPDFLoader(pdf_path)
-        docs=loader.load()
-        # await cl.Message(content=f"{str(docs[0].page_content[:1000])}").send()
-        text_splitter=RecursiveCharacterTextSplitter(chunk_size=1000,chunk_overlap=200)
-        documents=text_splitter.split_documents(docs)
-        if not documents:
-            print("⚠️ No content extracted from the pdf. Try another URL.")
-        else:
-            # Store embeddings in FAISS
-            vectorstore = FAISS.from_documents(documents, embedding_model)
-            # Store vectorstore in session for further querying
-            cl.user_session.set("vectorstore", vectorstore)
-            
-            print("✅ pdf processed successfully! You can now ask questions.")
+    # Initialize vectorstore as None
+    vectorstore = None
+    
+    if web_link.startswith("http://") or web_link.startswith("https://"):
         try:
-            os.remove(pdf_path)
-            print(f"Deleted file: {pdf_path}")  # Debugging
+            # Load and process webpage
+            loader = WebBaseLoader(web_link)
+            page_data = loader.load()
+            
+            # Split content into chunks
+            text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=200)
+            documents = text_splitter.split_documents(page_data)
+            
+            if not documents:
+                print("No content extracted from the webpage. Try another URL.")
+                return "No content could be extracted from the provided URL."
+            else:
+                # Store embeddings in FAISS
+                vectorstore = FAISS.from_documents(documents, embedding_model)
+                # You could store it in session if using Chainlit
+                # cl.user_session.set("vectorstore", vectorstore)
+                print("✅ Webpage processed successfully! You can now ask questions.")
         except Exception as e:
-            print(f"Error deleting file {pdf_path}: {e}")
+            print(f"Error processing webpage: {str(e)}")
+            return f"Error processing the webpage: {str(e)}"
+    else:
+        print("Invalid URL. Must start with http:// or https://")
+        return "The provided URL is invalid. Please provide a URL that starts with http:// or https://"
+    
+    # Only proceed with search if vectorstore was successfully created
+    if vectorstore:
+        try:
+            relevant_context = vectorstore.similarity_search(query, k=3)
+            context = " ".join([doc.page_content for doc in relevant_context])
+            return context
+        except Exception as e:
+            print(f"Error searching vectorstore: {str(e)}")
+            return f"Error retrieving relevant information: {str(e)}"
+    else:
+        return "No information was retrieved from the provided URL."
+# def web_agent(web_link: str, query: str ,config: RunnableConfig) -> str:
+#     """
+#     Process a webpage by loading its content, splitting it into chunks, and storing the embeddings in FAISS 
+#     whenever user ask for latest information.Please use some good websites like Wikipedia, Google, etc. for getting latest information.
+#     This function also stores the vectorstore in the session for further querying so after this you should feed infromation into llm model
+#     for better response.
+#     Args:
+#         web_link (str): The URL of the webpage to process. Must start with 'http://' or 'https://'.
+#         config (RunnableConfig): Configuration for the runnable.
+        
+#     Returns:
+#         str: The context retrieved from the vectorstore.
+#     """
+#     print("called web_agent")
+#     if web_link.startswith("http://") or web_link.startswith("https://"):
+#         # Load and process webpage
+#         loader = WebBaseLoader(web_link)
+#         page_data = loader.load()
+        
+#         # Split content into chunks
+#         text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=200)
+#         documents = text_splitter.split_documents(page_data)
+#         if not documents:
+#             print(" No content extracted from the webpage. Try another URL.")
+#         else:
+#             # Store embeddings in FAISS
+#             vectorstore = FAISS.from_documents(documents, embedding_model)
+#             # Store vectorstore in session for further querying
+#             # cl.user_session.set("vectorstore", vectorstore)
+        
+#             print("✅ Webpage processed successfully! You can now ask questions.")
+#     else:
+#         print("No Web_link")
+#     relevent_context = vectorstore.similarity_search(query, k=3)
+#     context = " ".join([doc.page_content for doc in relevent_context])
+#     return context
+# @tool
+# def Pdf_agent(pdf_path: str, config: RunnableConfig) -> None:
+#     """
+#     Process a pdf by loading its content, splitting it into chunks, and storing the embeddings in FAISS and deleting the pdf file.
+    
+#     Args:
+#         pdf_path (str): The path of the pdf to process. Must end with '.pdf'.
+#         config (RunnableConfig): Configuration for the runnable.
+        
+#     Returns:
+#         None: This function returns None and prints status messages.
+#     """
+#     # if element.mime and "pdf" in element.mime.lower():
+#     print("called Pdf_agent and pdf path-",pdf_path)
+#     if pdf_path.endswith(".pdf"):
+#         loader=PyPDFLoader(pdf_path)
+#         docs=loader.load()
+#         # await cl.Message(content=f"{str(docs[0].page_content[:1000])}").send()
+#         text_splitter=RecursiveCharacterTextSplitter(chunk_size=1000,chunk_overlap=200)
+#         documents=text_splitter.split_documents(docs)
+#     if not documents:
+#         print("⚠️ No content extracted from the pdf. Try another URL.")
+#     else:
+#         # Store embeddings in FAISS
+#         vectorstore = FAISS.from_documents(documents, embedding_model)
+#         # Store vectorstore in session for further querying
+#         cl.user_session.set("vectorstore", vectorstore)
+
+#         print("✅ pdf processed successfully! You can now ask questions.")
+#     try:
+#         os.remove(pdf_path)
+#         print(f"Deleted file: {pdf_path}")  # Debugging
+#     except Exception as e:
+#         print(f"Error deleting file {pdf_path}: {e}")
 
 @tool
 def save_recall_memory(memory: str, config: RunnableConfig) -> str:
@@ -158,10 +234,12 @@ prompt = ChatPromptTemplate.from_messages(
             " needs and understand their context.\n\n"
             ## 
             ## Agent Prompt
-            " You have three tools at your disposal: `memory`, `recall`, `web_agent`, `pdf_agent`."
+            " You have three tools at your disposal: `memory`, `recall`, `web_agent`, `context_agent`."
             " to help you store and retrieve information. You can use these tools.\n"
             " When user ask question that vary over time then please web agent for getting latest information."
             " if possible use some good websites like Wikipedia, Google, etc. for getting latest information.\n\n"
+            " you should use context agent when you then user is asking about sofa pricing."
+            " I have stored information in vector database jsut take context from there and try to filter relevent information\n\n"
             ## Rag Prompt
             # " You are designed to help user in finding the best possible answer from given information."
             # " You can ask user for clarification if you are unsure about"
@@ -207,7 +285,7 @@ prompt = ChatPromptTemplate.from_messages(
         ("placeholder", "{messages}"),
     ]
 )
-tools = [save_recall_memory, search_recall_memories, web_agent, Pdf_agent]
+tools = [save_recall_memory, search_recall_memories, web_agent, context_agent]
 model_with_tools = llm.bind_tools(tools)
 def agent(state: State) -> State:
     """Process the current state and generate a response using the LLM.
@@ -238,7 +316,6 @@ def agent(state: State) -> State:
             "messages": state["messages"],
             "context": context,
             "recall_memories": recall_str
-            
         }
     )
     return {
@@ -291,6 +368,7 @@ builder.add_edge(START, "load_memories")
 builder.add_edge("load_memories", "agent")
 builder.add_conditional_edges("agent", route_tools, ["tools", END])
 builder.add_edge("tools", "agent")
+builder.add_edge("agent", END)
 
 # Compile the graph
 memory = MemorySaver()
@@ -305,32 +383,9 @@ async def main(msg: cl.Message):
     try: 
         # await cl.Message(content=f"Unsupported file type: {msg.elements}").send()
         # file_path = ""
-        if msg.elements:
-            file_path = msg.elements[0].path
-            msg.content = msg.content + "pdf_file-" + file_path
-            # for element in msg.elements:
-            #     print(f"Received file: {element.name}, Type: {element.mime}, Path: {element.path}")  # Debugging
-            #     # if element.mime and "pdf" in element.mime.lower():
-            #     loader=PyPDFLoader(element.path)
-            #     docs=loader.load()
-            #     # await cl.Message(content=f"{str(docs[0].page_content[:1000])}").send()
-            #     text_splitter=RecursiveCharacterTextSplitter(chunk_size=1000,chunk_overlap=200)
-            #     documents=text_splitter.split_documents(docs)
-            #     if not documents:
-            #         await cl.Message(content="⚠️ No content extracted from the pdf. Try another URL.").send()
-            #     else:
-            #         # Store embeddings in FAISS
-            #         vectorstore = FAISS.from_documents(documents, embedding_model)
-            #         # Store vectorstore in session for further querying
-            #         cl.user_session.set("vectorstore", vectorstore)
-                    
-            #         await cl.Message(content="✅ pdf processed successfully! You can now ask questions.").send()
-            #     try:
-            #         # os.remove(element.path)
-            #         print(f"Deleted file: {element.path}")  # Debugging
-            #     except Exception as e:
-            #         print(f"Error deleting file {element.path}: {e}")
-        # print(msg.elements[0].path)
+        # if msg.elements:
+        #     file_path = msg.elements[0].path
+        #     msg.content = msg.content + "pdf_file-" + file_path
         response = list(graph.stream({"messages": [HumanMessage(content=msg.content)]}, config=config))
         
         answer = cl.Message(content=response[-1]['agent']['messages'][0].content)
