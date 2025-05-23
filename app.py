@@ -255,12 +255,12 @@ def agent(state: State) -> State:
     # Load the vector store
     print("content in agent-",state["messages"])
     # vectorstore = Chroma(persist_directory="chroma-BAAI", embedding_function=embedding_model)
-    vectorstore = cl.user_session.get("vectorstore",None)
-    if vectorstore is not None:
-        res = vectorstore.similarity_search(state["messages"][-1].content, k=3) 
-        context = " ".join([doc.page_content for doc in res])
-    else:
-        context = "User have not specified any context yet please go ahead with knowledege and give answer"
+    # vectorstore = cl.user_session.get("vectorstore",None)
+    # if vectorstore is not None:
+    #     res = vectorstore.similarity_search(state["messages"][-1].content, k=3) 
+    #     context = " ".join([doc.page_content for doc in res])
+    # else:
+    context = "User have not specified any context yet please go ahead with knowledege and give answer"
     # context = "I am dheeraj"
 
     prediction = bound.invoke(
@@ -292,11 +292,11 @@ def load_memories(state: State, config: RunnableConfig) -> State:
     # recall_memories = search_recall_memories.invoke(convo_str, config)
     
     # Now you can use similarity_search directly
-    recall_memories = recall_vector_store.similarity_search(
+    documents = recall_vector_store.similarity_search(
         query=convo_str,
-        k=5
+        k=3
     )
-    
+    recall_memories = [document.page_content for document in documents]
     return {
         "recall_memories": recall_memories,
     }
