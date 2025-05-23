@@ -1,10 +1,11 @@
 # Important libraries
 import chainlit as cl
 from langchain_groq import ChatGroq
-from dotenv import load_dotenv
+# from dotenv import load_dotenv
 import os
 from typing import List, Literal, Optional
 import uuid
+import numpy as np
 from transformers import AutoModel, AutoTokenizer
 from langchain_core.messages import get_buffer_string
 from langchain_core.prompts import ChatPromptTemplate
@@ -22,10 +23,12 @@ from langchain_core.tools import tool
 from langchain_core.vectorstores import InMemoryVectorStore
 from langchain_community.document_loaders import WebBaseLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.vectorstores import FAISS
+# from langchain_community.vectorstores import FAISS
+from sentence_transformers import SentenceTransformer
+import faiss
 from langchain_community.document_loaders import PyPDFLoader
 
-load_dotenv()
+# load_dotenv()
 
 # Initialize global variables with proper error handling
 
@@ -35,12 +38,26 @@ llm = ChatGroq(
     model_name="gemma2-9b-it"
 )
 
-model_name = "BAAI/bge-small-en-v1.5"
-tokenizer = AutoTokenizer.from_pretrained(model_name)
-model = AutoModel.from_pretrained(model_name)
-embedding_model = HuggingFaceEmbeddings(model_name="BAAI/bge-small-en-v1.5")
-recall_vector_store = InMemoryVectorStore(embedding_model)
+# model_name = "BAAI/bge-small-en-v1.5"
+model = SentenceTransformer("all-MiniLM-L6-v2")
+# tokenizer = AutoTokenizer.from_pretrained(model)
+# model = AutoModel.from_pretrained(model_name)
+# embedding_model = HuggingFaceEmbeddings(model_name="BAAI/bge-small-en-v1.5")
 
+# embedding_model = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+# recall_vector_store = InMemoryVectorStore(embedding_model)
+class CustomEmbeddings:
+    def __init__(self, model):
+        self.model = model
+    
+    def embed_documents(self, texts):
+        return self.model.encode(texts).tolist()
+    
+    def embed_query(self, text):
+        return self.model.encode(text).tolist()
+
+custom_embeddings = CustomEmbeddings(model)
+recall_vector_store = InMemoryVectorStore(custom_embeddings)
 class State(MessagesState):
     # add memories that will be retrieved based on the conversation context
     recall_memories: List[str]
@@ -61,14 +78,17 @@ def context_agent(query: str ) -> str:
         str: The context retrieved from the vectorstore.
     """
     print("called context_agent")
+    index = faiss.read_index("faiss_index/sofa_index.index")
+    with open("faiss_index/sofa_texts.txt", "r") as f:
+        texts = f.readlines()
+    # query = "What is the price of Noah Fabric?"
+    query_embedding = model.encode([query])
 
-    vectorstore = FAISS.load_local(
-                    "faiss_index", 
-                    embedding_model, 
-                    allow_dangerous_deserialization=True
-                            )
-    relevent_context = vectorstore.similarity_search(query, k=3)
-    context = " ".join([doc.page_content for doc in relevent_context])
+    D, I = index.search(np.array(query_embedding), k=3)
+
+    # Return the matching texts
+
+    context = " ".join(texts[i] for i in I[0])
     return context
 @tool
 def web_agent(web_link: str, query: str ) -> str:
@@ -85,8 +105,8 @@ def web_agent(web_link: str, query: str ) -> str:
     """
     print("called web_agent")
     
-    # Initialize vectorstore as None
-    vectorstore = None
+    # # Initialize vectorstore as None
+    # vectorstore = None
     
     if web_link.startswith("http://") or web_link.startswith("https://"):
         try:
@@ -102,11 +122,22 @@ def web_agent(web_link: str, query: str ) -> str:
                 print("No content extracted from the webpage. Try another URL.")
                 return "No content could be extracted from the provided URL."
             else:
+                texts = [doc.page_content for doc in documents]  # List of strings
+                model = SentenceTransformer("all-MiniLM-L6-v2")
+                embeddings = model.encode(texts, convert_to_numpy=True)
+                dimension = embeddings.shape[1]
+                index = faiss.IndexFlatL2(dimension)
+                index.add(embeddings)
+                query_embedding = model.encode([query])
+                D, I = index.search(query_embedding, k=3) 
+                context = ''.join([texts[i] for i in I[0]])
+                    
                 # Store embeddings in FAISS
-                vectorstore = FAISS.from_documents(documents, embedding_model)
+                # vectorstore = FAISS.from_documents(documents, embedding_model)
                 # You could store it in session if using Chainlit
                 # cl.user_session.set("vectorstore", vectorstore)
                 print("✅ Webpage processed successfully! You can now ask questions.")
+                return context
         except Exception as e:
             print(f"Error processing webpage: {str(e)}")
             return f"Error processing the webpage: {str(e)}"
@@ -114,87 +145,8 @@ def web_agent(web_link: str, query: str ) -> str:
         print("Invalid URL. Must start with http:// or https://")
         return "The provided URL is invalid. Please provide a URL that starts with http:// or https://"
     
-    # Only proceed with search if vectorstore was successfully created
-    if vectorstore:
-        try:
-            relevant_context = vectorstore.similarity_search(query, k=3)
-            context = " ".join([doc.page_content for doc in relevant_context])
-            return context
-        except Exception as e:
-            print(f"Error searching vectorstore: {str(e)}")
-            return f"Error retrieving relevant information: {str(e)}"
-    else:
-        return "No information was retrieved from the provided URL."
-# def web_agent(web_link: str, query: str ,config: RunnableConfig) -> str:
-#     """
-#     Process a webpage by loading its content, splitting it into chunks, and storing the embeddings in FAISS 
-#     whenever user ask for latest information.Please use some good websites like Wikipedia, Google, etc. for getting latest information.
-#     This function also stores the vectorstore in the session for further querying so after this you should feed infromation into llm model
-#     for better response.
-#     Args:
-#         web_link (str): The URL of the webpage to process. Must start with 'http://' or 'https://'.
-#         config (RunnableConfig): Configuration for the runnable.
-        
-#     Returns:
-#         str: The context retrieved from the vectorstore.
-#     """
-#     print("called web_agent")
-#     if web_link.startswith("http://") or web_link.startswith("https://"):
-#         # Load and process webpage
-#         loader = WebBaseLoader(web_link)
-#         page_data = loader.load()
-        
-#         # Split content into chunks
-#         text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=200)
-#         documents = text_splitter.split_documents(page_data)
-#         if not documents:
-#             print(" No content extracted from the webpage. Try another URL.")
-#         else:
-#             # Store embeddings in FAISS
-#             vectorstore = FAISS.from_documents(documents, embedding_model)
-#             # Store vectorstore in session for further querying
-#             # cl.user_session.set("vectorstore", vectorstore)
-        
-#             print("✅ Webpage processed successfully! You can now ask questions.")
-#     else:
-#         print("No Web_link")
-#     relevent_context = vectorstore.similarity_search(query, k=3)
-#     context = " ".join([doc.page_content for doc in relevent_context])
-#     return context
-# @tool
-# def Pdf_agent(pdf_path: str, config: RunnableConfig) -> None:
-#     """
-#     Process a pdf by loading its content, splitting it into chunks, and storing the embeddings in FAISS and deleting the pdf file.
-    
-#     Args:
-#         pdf_path (str): The path of the pdf to process. Must end with '.pdf'.
-#         config (RunnableConfig): Configuration for the runnable.
-        
-#     Returns:
-#         None: This function returns None and prints status messages.
-#     """
-#     # if element.mime and "pdf" in element.mime.lower():
-#     print("called Pdf_agent and pdf path-",pdf_path)
-#     if pdf_path.endswith(".pdf"):
-#         loader=PyPDFLoader(pdf_path)
-#         docs=loader.load()
-#         # await cl.Message(content=f"{str(docs[0].page_content[:1000])}").send()
-#         text_splitter=RecursiveCharacterTextSplitter(chunk_size=1000,chunk_overlap=200)
-#         documents=text_splitter.split_documents(docs)
-#     if not documents:
-#         print("⚠️ No content extracted from the pdf. Try another URL.")
-#     else:
-#         # Store embeddings in FAISS
-#         vectorstore = FAISS.from_documents(documents, embedding_model)
-#         # Store vectorstore in session for further querying
-#         cl.user_session.set("vectorstore", vectorstore)
 
-#         print("✅ pdf processed successfully! You can now ask questions.")
-#     try:
-#         os.remove(pdf_path)
-#         print(f"Deleted file: {pdf_path}")  # Debugging
-#     except Exception as e:
-#         print(f"Error deleting file {pdf_path}: {e}")
+
 
 @tool
 def save_recall_memory(memory: str, config: RunnableConfig) -> str:
@@ -333,8 +285,18 @@ def load_memories(state: State, config: RunnableConfig) -> State:
         State: The updated state with loaded memories.
     """
     convo_str = get_buffer_string(state["messages"])
-    convo_str = tokenizer.decode(tokenizer.encode(convo_str)[:2048])
-    recall_memories = search_recall_memories.invoke(convo_str, config)
+    # convo_str = tokenizer.decode(tokenizer.encode(convo_str)[:2048])
+    convo_str = convo_str[:2048]
+    # Step 4: Search memory using the embedding
+    # recall_memories = search_recall_memories.invoke(embedding_vector, config)
+    # recall_memories = search_recall_memories.invoke(convo_str, config)
+    
+    # Now you can use similarity_search directly
+    recall_memories = recall_vector_store.similarity_search(
+        query=convo_str,
+        k=5
+    )
+    
     return {
         "recall_memories": recall_memories,
     }
